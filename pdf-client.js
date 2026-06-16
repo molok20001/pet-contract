@@ -1,260 +1,207 @@
 /* ══════════════════════════════════════════
-   pdf-client.js — 前端 PDF 生成副程式
-   職責：在瀏覽器內使用 pdf-lib 生成契約 PDF
+   pdf-client.js — 前端 PDF 生成副程式（主入口）
+   職責：生成符合農業部範本樣式的契約 PDF
    ──────────────────────────────────────────
    依賴：
-   - pdf-lib（從 CDN 載入）
-   - @pdf-lib/fontkit（從 CDN 載入）
-   - fonts/SourceHanSansTW-Regular.otf（字型檔）
+   - pdf-utils.js（PageManager、wrapText 等工具）
+   - pdf-lib + fontkit（CDN）
+   - fonts/SourceHanSansTW-Regular.otf
    ──────────────────────────────────────────
-   提供的函式：
-   - generatePDF(formData, signatureDataUrl, clauses, shop)
-     → 回傳 Uint8Array（PDF 的二進位資料）
+   樣式特徵：
+   - 白底黑字，素雅正式
+   - 條文標題粗體
+   - 條文內容縮排
+   - 欄位底線格式
+   - 自動多頁分頁
 ══════════════════════════════════════════ */
 
 /* ════════════════════════════════════════
-   PDF 版面設定
-   A4 尺寸：595 × 842 點（1 點 = 1/72 英寸）
+   版面設定（A4：595 × 842 點）
 ════════════════════════════════════════ */
 const PDF_CONFIG = {
   pageWidth: 595,
   pageHeight: 842,
-  marginLeft: 50,
-  marginRight: 50,
-  marginTop: 60,
-  marginBottom: 60,
-  fontSizeTitle: 16,    // 契約標題字級
-  fontSizeH2: 13,       // 區塊標題字級
-  fontSizeBody: 11,     // 內文字級
-  fontSizeSmall: 9,     // 小字（條文內容）
-  lineHeight: 18,       // 行高
+  marginLeft: 65,
+  marginRight: 65,
+  marginTop: 70,
+  marginBottom: 70,
+  contentWidth: 465,    // 595 - 65 - 65
+  sizeTitle: 16,        // 文件主標題
+  sizeClauseTitle: 13,  // 條文標題
+  sizeBody: 11,         // 內文
+  sizeSmall: 10,        // 小字
+  lineHeightTitle: 24,
+  lineHeightBody: 20,
+  lineHeightSmall: 18,
+  clauseIndent: 30,     // 條文內容縮排量
 };
 
-// 字型快取（避免每次生成都重新下載字型）
+// 字型快取
 let cachedFontBytes = null;
 
 /**
- * 生成契約 PDF
- * @param {Object} formData     - 表單資料（ownerName, ownerId 等）
- * @param {string} signatureDataUrl - 簽名圖片 base64 字串
- * @param {Array}  clauses      - 條文資料陣列
- * @param {Object} shop         - 店家基本資料
- * @returns {Promise<Uint8Array>} PDF 二進位資料
+ * 生成契約 PDF（主入口）
+ * 由 app.js 的 handleSubmit() 呼叫
+ * @param {Object} formData        - 表單資料
+ * @param {string} signatureDataUrl - 簽名圖片 base64
+ * @param {Array}  clauses         - 條文資料陣列
+ * @param {Object} shop            - 店家基本資料
+ * @returns {Promise<Uint8Array>}  PDF 二進位資料
  */
 async function generatePDF(formData, signatureDataUrl, clauses, shop) {
-  // ── 步驟一：載入 pdf-lib 和 fontkit ──
-  // 從全域變數取得（由 index.html 引入的 CDN script 提供）
-  // 注意：rgb 函式必須在這裡取出，但下面的 drawText 是另一個函式，
-  // 取不到這裡的 rgb，所以改為在 createDrawContext 內部直接用 PDFLib.rgb
   const { PDFDocument } = PDFLib;
 
-  // ── 步驟二：載入中文字型 ──
+  // 載入字型
   const fontBytes = await loadFont();
 
-  // ── 步驟三：建立 PDF 文件 ──
+  // 建立 PDF 文件
   const pdfDoc = await PDFDocument.create();
-
-  // 註冊 fontkit（讓 pdf-lib 支援自訂字型子集化）
   pdfDoc.registerFontkit(fontkit);
-
-  // 嵌入中文字型（subset: true = 只嵌入用到的字元，大幅縮小檔案）
   const font = await pdfDoc.embedFont(fontBytes, { subset: true });
 
-  // ── 步驟四：建立第一頁 ──
-  const page = pdfDoc.addPage([PDF_CONFIG.pageWidth, PDF_CONFIG.pageHeight]);
+  // 建立分頁管理器（pdf-utils.js）
+  const pm = new PageManager(pdfDoc, font, PDF_CONFIG);
 
-  // 建立繪圖輔助物件（封裝座標管理）
-  const ctx = createDrawContext(page, font, PDF_CONFIG);
+  // 依序繪製各區塊
+  drawCoverInfo(pm, formData, shop);
+  drawClauses(pm, clauses);
+  await drawSignatureSection(pm, pdfDoc, formData, signatureDataUrl);
 
-  // ── 步驟五：繪製各區塊 ──
-  drawTitle(ctx, shop);
-  drawPartyInfo(ctx, formData, shop);
-  drawClauses(ctx, pdfDoc, clauses);
-  await drawSignature(ctx, pdfDoc, formData, signatureDataUrl);
-
-  // ── 步驟六：輸出 PDF ──
   return await pdfDoc.save();
 }
 
 /**
- * 載入中文字型（有快取機制）
- * @returns {Promise<ArrayBuffer>}
+ * 載入中文字型（有快取，避免重複下載）
  */
 async function loadFont() {
   if (cachedFontBytes) return cachedFontBytes;
-
-  // 從靜態檔案載入字型
   const response = await fetch('fonts/SourceHanSansTW-Regular.otf');
-  if (!response.ok) {
-    throw new Error('字型載入失敗，請重新整理頁面');
-  }
+  if (!response.ok) throw new Error('字型載入失敗，請重新整理頁面');
   cachedFontBytes = await response.arrayBuffer();
   return cachedFontBytes;
 }
 
-/**
- * 建立繪圖輔助物件
- * 封裝目前 Y 座標，提供 drawText 和換行功能
- */
-function createDrawContext(page, font, config) {
-  // 目前繪圖的 Y 座標（從頁面上方開始往下）
-  // PDF 座標系統是從左下角為原點，Y 往上增加
-  // 所以頁面頂部的 Y = pageHeight - marginTop
-  let currentY = config.pageHeight - config.marginTop;
-  const contentWidth = config.pageWidth - config.marginLeft - config.marginRight;
-
-  return {
-    page,
-    font,
-    config,
-    contentWidth,
-
-    // 取得目前 Y 座標
-    get y() { return currentY; },
-
-    // 往下移動指定距離
-    moveDown(amount) { currentY -= amount; },
-
-    // 在目前位置繪製文字
-    drawText(text, options = {}) {
-      const size = options.size || config.fontSizeBody;
-      const x = options.x !== undefined ? options.x : config.marginLeft;
-      const color = options.color || { r: 0.18, g: 0.12, b: 0.11 };
-
-      page.drawText(text, {
-        x,
-        y: currentY,
-        size,
-        font,
-        // 直接用 PDFLib.rgb，因為這個函式作用域裡沒有單獨的 rgb
-        color: PDFLib.rgb(color.r, color.g, color.b),
-        maxWidth: options.maxWidth || contentWidth,
-      });
-    },
-
-    // 繪製分隔線
-    drawDivider() {
-      page.drawLine({
-        start: { x: config.marginLeft, y: currentY },
-        end: { x: config.pageWidth - config.marginRight, y: currentY },
-        thickness: 0.5,
-        color: PDFLib.rgb(0.8, 0.78, 0.75),
-      });
-    }
-  };
-}
+/* ════════════════════════════════════════
+   各區塊繪製函式
+════════════════════════════════════════ */
 
 /**
- * 繪製契約標題
+ * 繪製封面資料
+ * 包含：主標題、審閱日期行、甲方欄位、乙方欄位
  */
-function drawTitle(ctx, shop) {
+function drawCoverInfo(pm, formData, shop) {
+  const cfg = pm.config;
+
+  // 主標題
+  pm.ensureSpace(40);
+  pm.drawText('犬、貓美容服務定型化契約', {
+    size: cfg.sizeTitle,
+    x: cfg.marginLeft,
+  });
+  pm.moveDown(cfg.lineHeightTitle + 4);
+
   // 店家名稱
-  ctx.drawText(shop.company_name, {
-    size: ctx.config.fontSizeSmall,
-    color: { r: 0.5, g: 0.42, b: 0.37 }
+  pm.drawText(shop.company_name || '', {
+    size: cfg.sizeSmall,
+    color: '#555555',
+    x: cfg.marginLeft,
   });
-  ctx.moveDown(20);
+  pm.moveDown(cfg.lineHeightSmall + 12);
 
-  // 契約主標題
-  ctx.drawText('犬、貓美容服務定型化契約', {
-    size: ctx.config.fontSizeTitle,
-    color: { r: 0.29, g: 0.22, b: 0.17 }
+  pm.drawDivider({ thickness: 1, color: '#333333' });
+  pm.moveDown(16);
+
+  // 審閱日期行
+  pm.drawText('本契約於中華民國　　　年　　　月　　　日由甲方攜回審閱。', {
+    size: cfg.sizeBody,
   });
-  ctx.moveDown(8);
-
-  // 分隔線
-  ctx.drawDivider();
-  ctx.moveDown(20);
-}
-
-/**
- * 繪製甲乙方基本資料
- */
-function drawPartyInfo(ctx, formData, shop) {
-  const labelColor = { r: 0.29, g: 0.22, b: 0.17 };
-  const valueColor = { r: 0.18, g: 0.12, b: 0.11 };
-  const size = ctx.config.fontSizeBody;
-  const lineH = ctx.config.lineHeight;
-
-  // 區塊標題
-  ctx.drawText('甲方（飼主）資料', {
-    size: ctx.config.fontSizeH2,
-    color: labelColor
+  pm.moveDown(cfg.lineHeightBody);
+  pm.drawText('甲乙雙方同意就本契約所載條款及附件內容辦理：', {
+    size: cfg.sizeBody,
   });
-  ctx.moveDown(lineH + 4);
+  pm.moveDown(cfg.lineHeightBody + 16);
 
-  // 繪製每個欄位
+  // 立契約書人標題
+  pm.drawText('立契約書人', {
+    size: cfg.sizeClauseTitle,
+  });
+  pm.moveDown(cfg.lineHeightTitle + 4);
+
+  // 甲方欄位（底線格式）
   const fields = [
-    ['姓名', formData.ownerName],
-    ['身分證號／居留證號碼', formData.ownerId],
-    ['通訊地址', formData.ownerAddress],
-    ['聯絡電話', formData.ownerPhone],
-    ['緊急聯絡人', `${formData.emergencyName}　${formData.emergencyPhone}`],
-    ['指定獸醫診療場所', formData.vetName || '（依店家預設）'],
-    ['寵物晶片號碼／辨識資訊', formData.petChip],
-    ['簽約日期', formData.signDate],
+    ['消費者姓名', formData.ownerName || ''],
+    ['身分證統一編號／居留證號碼', formData.ownerId || ''],
+    ['通訊地址', formData.ownerAddress || ''],
+    ['聯絡電話', formData.ownerPhone || ''],
+    ['緊急聯絡人', formData.emergencyName || ''],
+    ['緊急聯絡人電話', formData.emergencyPhone || ''],
+    ['指定獸醫診療場所', formData.vetName || shop.default_vet || ''],
+    ['寵物晶片號碼', formData.petChip || ''],
+    ['簽約日期', formData.signDate || ''],
   ];
 
   fields.forEach(([label, value]) => {
-    ctx.drawText(`${label}：${value}`, { size, color: valueColor });
-    ctx.moveDown(lineH);
+    pm.drawField(label, value);
   });
 
-  ctx.moveDown(8);
-  ctx.drawDivider();
-  ctx.moveDown(20);
+  pm.moveDown(12);
+
+  // 乙方欄位
+  pm.drawField('企業經營者', shop.company_name || '');
+  pm.drawField('代表人', shop.owner_name || '');
+  pm.drawField('營業地址', shop.address || '');
+
+  pm.moveDown(20);
+  pm.drawDivider();
+  pm.moveDown(16);
 }
 
 /**
- * 繪製條文內容
- * 注意：條文較多時可能需要新增頁面（目前暫時一頁處理）
+ * 繪製所有條文
+ * 條文標題：粗體（較大字級模擬），內容縮排
  */
-function drawClauses(ctx, pdfDoc, clauses) {
-  ctx.drawText('契約條款', {
-    size: ctx.config.fontSizeH2,
-    color: { r: 0.29, g: 0.22, b: 0.17 }
-  });
-  ctx.moveDown(ctx.config.lineHeight + 4);
+function drawClauses(pm, clauses) {
+  const cfg = pm.config;
 
   clauses.forEach(clause => {
+    pm.ensureSpace(60);
+
     // 條文標題
-    ctx.drawText(clause.title, {
-      size: ctx.config.fontSizeBody,
-      color: { r: 0.29, g: 0.22, b: 0.17 }
+    pm.drawText(clause.title, {
+      size: cfg.sizeClauseTitle,
     });
-    ctx.moveDown(ctx.config.lineHeight);
+    pm.moveDown(cfg.lineHeightTitle + 4);
 
-    // 條文內容
+    // 條文內容（縮排）
     const content = getClauseContent(clause);
-    ctx.drawText(content, {
-      size: ctx.config.fontSizeSmall,
-      color: { r: 0.35, g: 0.28, b: 0.24 },
-      maxWidth: ctx.contentWidth
-    });
-    ctx.moveDown(ctx.config.lineHeight + 4);
-  });
+    if (content) {
+      pm.drawParagraph(content, {
+        size: cfg.sizeBody,
+        indent: cfg.clauseIndent,
+        lineHeight: cfg.lineHeightBody,
+      });
+    }
 
-  ctx.drawDivider();
-  ctx.moveDown(20);
+    pm.moveDown(12);
+  });
 }
 
 /**
  * 繪製簽名區
- * @param {Object} ctx
- * @param {PDFDocument} pdfDoc
- * @param {Object} formData
- * @param {string} signatureDataUrl - base64 PNG
+ * 包含：甲方手寫簽名圖片、姓名、日期
  */
-async function drawSignature(ctx, pdfDoc, formData, signatureDataUrl) {
-  ctx.drawText('甲方簽名', {
-    size: ctx.config.fontSizeH2,
-    color: { r: 0.29, g: 0.22, b: 0.17 }
-  });
-  ctx.moveDown(ctx.config.lineHeight + 8);
+async function drawSignatureSection(pm, pdfDoc, formData, signatureDataUrl) {
+  const cfg = pm.config;
+
+  pm.ensureSpace(200);
+  pm.drawDivider();
+  pm.moveDown(16);
+
+  pm.drawText('甲方簽名', { size: cfg.sizeClauseTitle });
+  pm.moveDown(cfg.lineHeightTitle + 8);
 
   // 嵌入簽名圖片
   try {
-    // 把 base64 字串轉成二進位資料
     const base64Data = signatureDataUrl.split(',')[1];
     const binaryStr = atob(base64Data);
     const bytes = new Uint8Array(binaryStr.length);
@@ -263,29 +210,47 @@ async function drawSignature(ctx, pdfDoc, formData, signatureDataUrl) {
     }
 
     const signatureImage = await pdfDoc.embedPng(bytes);
+    const imgDims = signatureImage.scale(1);
 
-    // 計算簽名圖片的顯示大小（寬度固定，高度等比縮放）
-    const imgWidth = 200;
-    const imgHeight = 80;
+    // 高度固定 80，寬度等比縮放
+    const displayHeight = 80;
+    const displayWidth = Math.min(
+      (imgDims.width / imgDims.height) * displayHeight,
+      cfg.contentWidth
+    );
 
-    ctx.page.drawImage(signatureImage, {
-      x: ctx.config.marginLeft,
-      y: ctx.y - imgHeight,
-      width: imgWidth,
-      height: imgHeight,
+    pm.ensureSpace(displayHeight + 16);
+
+    pm.currentPage.drawImage(signatureImage, {
+      x: cfg.marginLeft,
+      y: pm.currentY - displayHeight,
+      width: displayWidth,
+      height: displayHeight,
     });
-    ctx.moveDown(imgHeight + 8);
+    pm.moveDown(displayHeight + 12);
+
   } catch (err) {
     console.error('[pdf-client] 簽名圖片嵌入失敗：', err);
-    ctx.drawText('（簽名圖片嵌入失敗）', {
-      size: ctx.config.fontSizeSmall,
-      color: { r: 0.8, g: 0.2, b: 0.2 }
-    });
-    ctx.moveDown(ctx.config.lineHeight);
+    pm.moveDown(80);
   }
 
-  // 簽名人姓名
-  ctx.drawText(`甲方：${formData.ownerName}`, {
-    size: ctx.config.fontSizeBody
-  });
+  // 姓名與日期
+  pm.drawField('甲方：', formData.ownerName || '');
+  pm.moveDown(8);
+  pm.drawField('日期：', formData.signDate || '');
+}
+
+/**
+ * 取得條文要顯示的文字內容
+ * 邏輯與 clause-renderer.js 相同，PDF 端獨立實作
+ */
+function getClauseContent(clause) {
+  if (clause.type === 'fixed') return clause.content || '';
+  if (clause.type === 'selectable') {
+    if (!clause.options || !clause.selected) return '';
+    const opt = clause.options.find(o => o.key === clause.selected);
+    return opt ? opt.content : '';
+  }
+  if (clause.type === 'editable') return clause.content || '';
+  return '';
 }
