@@ -13,8 +13,31 @@
 /**
  * 執行所有欄位驗證
  * @returns {boolean} true = 全部通過，false = 有錯誤
+ *
+ * ⚠️ 測試階段設定（2026/06/16）：
+ * 目前暫時放寬所有欄位必填驗證，方便快速測試。
+ * 下方原本的完整驗證邏輯保留在 validateFormStrict()，
+ * 正式版本只要把這裡改成 return validateFormStrict() 即可恢復。
+ * 注意：簽名檢查不在這個函式，在 app.js 的 isSignatureEmpty()，不受影響。
  */
 function validateForm() {
+  // 測試階段：清除舊錯誤後直接通過
+  clearAllErrors();
+  return true;
+}
+
+/**
+ * 完整驗證邏輯（正式版本使用）
+ * 測試階段暫時不呼叫，保留供日後恢復
+ * @returns {boolean} true = 全部通過，false = 有錯誤
+ */
+function validateFormStrict() {
+  // ════════════════════════════════════════
+  // ⚠️ 測試模式：暫時跳過所有必填驗證
+  // 測試完畢後，刪除下面這一行 return true; 即可恢復正常驗證
+  // ════════════════════════════════════════
+  return true;
+
   // 先清除所有上次的錯誤提示
   clearAllErrors();
 
