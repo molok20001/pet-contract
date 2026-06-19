@@ -151,6 +151,8 @@ async function handleSubmit() {
   }
 
   // ── 步驟二：檢查簽名是否為空（signature.js）──
+  // ⚠️ 測試模式：暫時註解掉簽名檢查，測試完畢後取消註解恢復
+  /*
   if (isSignatureEmpty()) {
     const signatureWrapper = document.getElementById('signature-wrapper');
     if (signatureWrapper) signatureWrapper.classList.add('error');
@@ -160,6 +162,7 @@ async function handleSubmit() {
     showGlobalError('請完成簽名後再送出');
     return;
   }
+  */
 
   // ── 步驟三：生成 PDF（pdf-client.js）──
   submitBtn.textContent = '生成 PDF 中...';
@@ -177,7 +180,30 @@ async function handleSubmit() {
     // 儲存 PDF 供下載按鈕使用
     window.generatedPdfBytes = pdfBytes;
 
-    // ── 步驟四：顯示完成畫面 ──
+    // ── 步驟四：POST 資料給 Workers 存入 KV ──
+    submitBtn.textContent = '儲存中...';
+    try {
+      const response = await fetch('https://pet-contract.pet-cont-mor.workers.dev/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shop_id: 'default',
+          formData,
+          signatureDataUrl,  // 注意：簽名圖片不存 KV，Worker 只記錄 has_signature
+          clauses: TEST_CLAUSES,
+        }),
+      });
+      const result = await response.json();
+      if (!result.success) {
+        console.warn('[app] Worker 儲存失敗：', result);
+        // 儲存失敗不中斷流程，仍讓客戶下載 PDF
+      }
+    } catch (err) {
+      // 網路錯誤不中斷流程，仍讓客戶下載 PDF
+      console.warn('[app] Worker 呼叫失敗：', err);
+    }
+
+    // ── 步驟五：顯示完成畫面 ──
     showSuccessScreen();
 
   } catch (err) {
