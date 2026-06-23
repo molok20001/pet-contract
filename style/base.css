@@ -8,7 +8,7 @@
 @font-face {
   font-family: 'SansTW';
   /* 字型檔案放在 fonts/ 資料夾 */
-  src: url('fonts/SourceHanSansTW-Regular.otf') format('opentype');
+  src: url('../fonts/SourceHanSansTW-Regular.otf') format('opentype');
   font-weight: normal;
   font-style: normal;
   /* 字型載入前先用系統字型，載入後自動切換 */
