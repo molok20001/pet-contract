@@ -119,7 +119,10 @@ class PageManager {
 
     // 繪製標籤
     const textColor = hexToRgb('#1a1a1a');
-    const labelWidth = measureText(label, size, this.font) + 4;
+
+    // 標籤寬度用固定值：每個中文字約 size * 1.0，每個英文/符號約 size * 0.6
+    // 不用 measureText 是因為 subset 模式下，字元在 drawText 之前量測會不準確
+    const labelWidth = label.length * size * 0.75 + 8;
 
     this.currentPage.drawText(label, {
       x,

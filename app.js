@@ -89,7 +89,8 @@ function fillSignDate() {
   const month = String(today.getMonth() + 1).padStart(2, '0');
   const day = String(today.getDate()).padStart(2, '0');
 
-  dateInput.value = `${year}年${month}月${day}日`;
+  // 格式：YYYY/MM/DD，避免中文「年月日」在 PDF 中顯示異常
+  dateInput.value = `${year}/${month}/${day}`;
 }
 
 /**
