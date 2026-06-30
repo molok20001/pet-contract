@@ -13,12 +13,17 @@
 // Worker API 網址（統一在這裡修改）
 const WORKER_URL = 'https://pet-contract.pet-cont-mor.workers.dev';
 
-// 目前店家 ID（未來從網址參數取得）
-const SHOP_ID = 'default';
+// 目前店家 ID（從網址參數 ?shop_id= 取得，見 shop-id.js）
+const SHOP_ID = getShopId();
 
 // 儲存從 Worker 取得的資料（給 PDF 生成用）
 let shopData = null;
 let clausesData = [];
+
+// 目前店家的版本模式（從 KV 的 shop 設定讀取，見 loadConfig）
+// "6" = 基底（當面簽、自行下載）；"5" = 加自動寄信；"7" = LINE
+// 讀不到時預設 "6"（最基本、不依賴外部服務，最安全的 fallback）
+let currentMode = '6';
 
 /* ════════════════════════════════════════
    頁面載入後初始化
@@ -50,6 +55,10 @@ async function loadConfig() {
       // 儲存資料供後續使用
       shopData = data.shopConfig;
       clausesData = data.clauses;
+
+      // 讀取版本模式（mode 是 shopConfig 的一個欄位，由系統方建置時寫入）
+      // 無 mode 欄位的舊資料 → 維持預設 "6"
+      currentMode = shopData.mode || '6';
 
       // 填入頁首店家名稱
       const shopNameEl = document.getElementById('shop-name');
@@ -89,8 +98,7 @@ function fillSignDate() {
   const month = String(today.getMonth() + 1).padStart(2, '0');
   const day = String(today.getDate()).padStart(2, '0');
 
-  // 格式：YYYY/MM/DD，避免中文「年月日」在 PDF 中顯示異常
-  dateInput.value = `${year}/${month}/${day}`;
+  dateInput.value = `${year}年${month}月${day}日`;
 }
 
 /**
